@@ -6,12 +6,12 @@ module marketplace::marketplace {
     use sui::{
         balance::{Self, Balance},
         coin::{Self, Coin},
+        dynamic_field,
         dynamic_object_field,
         event::emit,
         kiosk,
         package,
-        sui::SUI,
-        vec_map::{Self as map, VecMap}
+        sui::SUI
     };
 
     public struct MARKETPLACE has drop {}
@@ -22,8 +22,8 @@ module marketplace::marketplace {
         name: String,
         // Base fee for the marketplace in percentage 100 = 1%
         baseFee: u16,
-        // Personal fee for each user in percentage 100 = 1%, 10000 = 100%
-        personalFee: VecMap<address, u16>,
+        // // Personal fee for each user in percentage 100 = 1%, 10000 = 100%
+        // personalFee: VecMap<address, u16>,
         // Store PurchaseCap for each store
         balance: Balance<SUI>,
     }
@@ -80,7 +80,7 @@ module marketplace::marketplace {
             id: new_marketplace,
             name: utf8(b"Hokko"),
             baseFee: 200, // 2%
-            personalFee: map::empty(),
+            // personalFee: map::empty(),
             balance: balance::zero(),
         });
         a_c::default<MARKETPLACE>(&otw, ctx);
@@ -149,22 +149,31 @@ module marketplace::marketplace {
     ) {
         assert!(has_cap_access<MARKETPLACE, AdminCap>(roles, admin), ENotAuthorized);
         assert!(recipient.length() == fee.length(), ENotSameLength);
-
+        let length = recipient.length();
         let mut i = 0;
-        while (i < recipient.length()) {
-            if (map::contains<address, u16>(&self.personalFee, &recipient[i])) {
-                let old_fee = map::get_mut<address, u16>(&mut self.personalFee, &recipient[i]);
-                *old_fee = fee[i];
-                i = i + 1;
-            } else {
-                map::insert(&mut self.personalFee, recipient[i], fee[i]);
-                i = i + 1;
-            };
+        while (i <  length) {
+            self.add_personal(recipient[i], fee[i]);
+            i = i + 1;
         };
         emit(PersonalFeeSetEvent {
             recipient: recipient,
             fee: fee,
         });
+    }
+
+    public fun remove_personal_fee(
+        self: &mut MarketPlace,
+        admin: &RoleCap<AdminCap>,
+        roles: &SRoles<MARKETPLACE>,
+        recipient: vector<address>,
+    ) {
+        assert!(has_cap_access<MARKETPLACE, AdminCap>(roles, admin), ENotAuthorized);
+        let length = recipient.length();
+        let mut i = 0;
+        while (i <  length) {
+            self.remove_personal(recipient[i]);
+            i = i + 1;
+        };
     }
 
     /// @dev Updates the base fee for all marketplace transactions. Only authorized administrators can call this function.
@@ -266,17 +275,11 @@ module marketplace::marketplace {
     /// @return The applicable fee as a `u16` value.
 
     public fun get_fee(self: &MarketPlace, owner: address): u16 {
-        let personal_fee_exists = map::contains<address, u16>(&self.personalFee, &owner);
-
-        if (personal_fee_exists) {
-            let personal_fee = *map::get<address, u16>(&self.personalFee, &owner);
-            if (personal_fee >= self.baseFee) {
-                return self.baseFee
-            } else {
-                return personal_fee
-            }
-        };
-        self.baseFee
+        if (dynamic_field::exists_(&self.id, owner)) {
+            std::u16::min(*dynamic_field::borrow<address, u16>(&self.id, owner), self.baseFee)
+        } else {
+            self.baseFee
+        }
     }
 
     // ==================== Package-Public Functions  ========================
@@ -343,6 +346,22 @@ module marketplace::marketplace {
 
     public(package) fun assert_offer_match(cap: &OfferCap, offer_id: ID) {
         assert!(cap.offer == offer_id, ENotSameId);
+    }
+
+    // ================== Private Functions ========================
+    fun add_personal(self: &mut MarketPlace, address: address, fee: u16) {
+        if (dynamic_field::exists_(&self.id, address)) {
+            let old_fee = dynamic_field::borrow_mut<address, u16>(&mut self.id, address);
+            *old_fee = fee;
+        } else {
+            dynamic_field::add(&mut self.id, address, fee);
+        };
+    }
+
+    fun remove_personal(self: &mut MarketPlace, address: address) {
+        if (dynamic_field::exists_(&self.id, address)) {
+            dynamic_field::remove<address, u16>(&mut self.id, address);
+        };
     }
 
     /// @dev Execute init() for test.
